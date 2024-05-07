@@ -10,13 +10,6 @@ app.config['SQLALCHEMY_DATABASE_URI']='sqlite:///data.db'
 app.config['SECRET_KEY']='privatekey'
 db=SQLAlchemy(app)
 
-class User(db.Model):
-    id=db.Column(db.Integer,primary_key=True)
-    username=db.Column(db.String(50),nullable=False,unique=True)
-    password=db.Column(db.String(50),nullable=False)
-@app.before_request
-def create_table():
-    db.create_all()
 def token_required(f):
     @wraps(f)
     def decorated(*args,**kwargs):
@@ -38,6 +31,24 @@ def token_required(f):
             return jsonify({'message': 'INvalid token'})
         return f(*args,**kwargs)
     return decorated
+
+class User(db.Model):
+    id=db.Column(db.Integer,primary_key=True)
+    username=db.Column(db.String(50),nullable=False,unique=True)
+    password=db.Column(db.String(50),nullable=False)
+
+class List(db.Model):
+    id=db.Column(db.Integer,primary_key="True")
+    title=db.Column(db.String(50), nullable=False)
+    description=db.Column(db.String(500), nullable=False)
+    status = db.Column(db.Enum('active', 'archived'), default='active')  
+    date_created = db.Column(db.DateTime, default=datetime.now)
+    def __repr__(self):
+        return f"{self.title}"
+
+@app.before_request
+def create_table():
+    db.create_all()
 
 @app.route('/create',methods=['GET','POST'])
 def create_user():
@@ -81,85 +92,80 @@ def login():
         return make_response("Incorrect password")
     else:
         return render_template('login.html')
+
+@app.route('/create_entry',methods=['POST'])
+@token_required
+def create_entry():
+    Entry = request.form
+    new_entry = List()
+    try:
+        new_entry.title = Entry['title']
+        new_entry.description = Entry['description']
+        new_entry.status = Entry['status']  # Assuming the form includes a field named 'status'
+        db.session.add(new_entry)
+        db.session.commit()
+        return jsonify("New Entry Created")
+    except KeyError as e:
+        # Handle the case where a required form field is missing
+        return jsonify(f"Missing form field: {e}")
+    except Exception as e:
+        # Handle other exceptions (e.g., database errors)
+        return jsonify(f"Error creating new entry: {e}")
+
+@app.route('/', methods=['GET'])
+def retrieve():
+    # Query all entries from the List table
+    entries = List.query.all()
+    
+    # Convert the list of List objects to a list of dictionaries
+    entries_list = []
+    for entry in entries:
+        entry_dict = {
+            'id': entry.id,
+            'title': entry.title,
+            'description': entry.description,
+            'status': entry.status
+            # Add more fields if needed
+        }
+        entries_list.append(entry_dict)
+    
+    # Return the list of dictionaries as JSON
+    return jsonify(entries_list)
+
+@app.route('/update_entry/<int:id>',methods=['POST'])
+@token_required
+def update(id):
+    Entry = request.form
+    update_entry = List.query.filter_by(id=id).first()
+    try:
+        update_entry.title = Entry['title']
+        update_entry.description = Entry['description']
+        update_entry.status = Entry['status']  # Assuming the form includes a field named 'status'
+        db.session.commit()
+        return jsonify("Entry Updated")
+    except KeyError as e:
+        # Handle the case where a required form field is missing
+        return jsonify(f"Missing form field: {e}")
+    except Exception as e:
+        # Handle other exceptions (e.g., database errors)
+        return jsonify(f"Error creating new entry: {e}")
+
+@app.route('/delete_entry/<int:id>',methods=['DELETE'])
+@token_required
+def delete(id):
+    entry=List.query.filter_by(id=id).first()
+    try:
+        db.session.delete(entry)
+        db.session.commit()
+        return jsonify(id,"deleted")
+    except:
+        return jsonify("Invalid id")
+
 @app.route('/home')
 @token_required
 def home():
     return 'ALL good'
-@app.route('/submit_form', methods=['GET'])
-def submit_form():
-    # Get form data from the request
-    form_data = request.form
 
-    # Process the form data
-    input1 = form_data.get('input1')
-    input2 = form_data.get('input2')
-
-    # Perform any necessary processing or validation
-    # For example, you could save the form data to a database
-
-    # Return a JSON response indicating success
-    return jsonify({'message': 'Form submitted successfully', 'input1': input1, 'input2': input2})
-
-# class List(db.Model):
-#     id=db.Column(db.Integer,primary_key="True")
-#     title=db.Column(db.String(50), nullable=False)
-#     description=db.Column(db.String(500), nullable=False)
-#     status=db.Column(db.String(50), nullable=False)
-#     date_created = db.Column(db.DateTime, default=datetime.now)
-#     def __repr__(self):
-#         return f"{self.title}"
-# @app.before_request
-# def create_table():
-#     db.create_all()
-# @app.route('/',methods=["POST","GET"])
-# def home():
-#     if request.method=="POST":
-#         new_instance=List(name=request.form["name"],m_score=request.form["m_score"],p_score=request.form["p_score"],c_score=request.form["c_score"])
-#         scores=List.query.filter_by(name=request.form["name"],m_score=request.form["m_score"],p_score=request.form["p_score"],c_score=request.form["c_score"])
-#         if scores:
-#             return " The response exists."
-#         try :
-#             db.session.add(new_instance)
-#             db.session.commit()
-#             return redirect('/')
-#         except:
-#             return "There is an issue in adding marks"
-#     else:
-#         list=List.query.all()
-#         return render_template('home.html',list=list)
-# @app.route('/data/<int:id>')
-# def retrieve(id):
-#     student=List.query.filter_by(id=id).first()
-#     if student:
-#         scores=List.query.filter_by(name=student.name)
-#         return render_template('data.html',scores=scores)
-#     else :
-#         return "Id is not valid"
-# @app.route('/update/<int:id>',methods=['GET',"POST"])
-# def update(id):
-#     student=List.query.filter_by(id=id).first()
-#     if request.method=="POST":
-#         if student:
-#             student.m_score=request.form["m_score"]
-#             student.p_score=request.form["p_score"]
-#             student.c_score=request.form["c_score"]
-#             db.session.commit()
-#             return redirect('/')
-#         else :
-            
-#             return "Id is not valid"
-#     else:
-#         return render_template('update.html')
-# @app.route('/delete/<int:id>')
-# def delete(id):
-#     student=List.query.filter_by(id=id).first()
-#     if student:
-#         db.session.delete(student)
-#         db.session.commit()
-#         return redirect('/')
-#     else :
-        
-#         return "Id is not valid"
 
 if __name__=="__main__":
     app.run(debug="True")
