@@ -1,15 +1,17 @@
+# makesure the following libraries are installed in your environment
 from flask import Flask,jsonify,make_response,request,redirect,url_for,render_template
 from flask_sqlalchemy import SQLAlchemy
-import uuid
-from werkzeug.security import generate_password_hash,check_password_hash
 import jwt
-from datetime import datetime,timedelta
+from datetime import datetime
+import time
 from functools import wraps
+
 app=Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI']='sqlite:///data.db'
 app.config['SECRET_KEY']='privatekey'
 db=SQLAlchemy(app)
 
+#fn to verifying token 
 def token_required(f):
     @wraps(f)
     def decorated(*args,**kwargs):
@@ -17,21 +19,18 @@ def token_required(f):
         if 'x-access-token' in request.cookies:
             token=request.cookies.get('x-access-token')
         if not token:
+            # no login data available
             return jsonify({'message': 'Token is missing'})
         try:    
             data=jwt.decode(token,app.config['SECRET_KEY'], algorithms=['HS256'])   
             expiration_time = datetime.fromtimestamp(data['exp'])
-
-            # Compare expiration time with current time
-            current_time = datetime.now()
-            if current_time > expiration_time:
-                return jsonify({'message': 'Token has expired','now':current_time+timedelta(seconds=300),'exp':expiration_time}), 401
-            current_user=User.query.filter_by(username=data['username']).first()
         except:
-            return jsonify({'message': 'INvalid token'})
+            # login data expired (5 min)
+            return jsonify({'message': 'Invalid token'})
         return f(*args,**kwargs)
     return decorated
 
+#creating tables for user and video entries
 class User(db.Model):
     id=db.Column(db.Integer,primary_key=True)
     username=db.Column(db.String(50),nullable=False,unique=True)
@@ -50,48 +49,37 @@ class List(db.Model):
 def create_table():
     db.create_all()
 
-@app.route('/create',methods=['GET','POST'])
+#creating user
+@app.route('/create',methods=['POST'])
 def create_user():
-    if request.method=='POST':
-        data=request.form
-        try:
-            new_user=User(username=data['username'],password=data['password'])
-            db.session.add(new_user)
-            db.session.commit()
-            return redirect('/login')
-        except:
-            return jsonify('username_taken')
-    else:
-        return render_template('create.html')
+    data=request.form
+    try:
+        new_user=User(username=data['username'],password=data['password'])
+        db.session.add(new_user)
+        db.session.commit()
+        return redirect('/login')
+    except:
+        return jsonify('username_taken')
+@app.route('/login',methods=['POST'])
 
-@app.route('/login',methods=['GET','POST'])
+#login and setting token
 def login():
-    if request.method=='POST':
-        auth=request.form
-        if not auth or not auth["username"] or not auth["password"]:
-            return make_response('Could not verify')
-        user=User.query.filter_by(username=auth['username']).first()
-        if not user:
-            return make_response('No User found')
-        if user.password==auth['password']:
-            exp_time=datetime.now()+timedelta(seconds=30)
-            token=jwt.encode({'username':user.username,'exp':exp_time},app.config['SECRET_KEY'])
-            # try:
-            #     data=jwt.decode(token,app.config['SECRET_KEY'], algorithms=['HS256'])
-            # except jwt.ExpiredSignatureError:
-            #     return "Token has expired"
-            # except jwt.DecodeError:
-            #     return "Invalid token"
-            # except jwt.Exception as e:
-            #     return f"Error decoding token: {e}"
-            response = make_response(redirect(url_for('home')))
-            # response.set_cookie('x-access-token', "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IlVkYXkzIiwiZXhwIjoxNzE1MDk0NzA4fQ.wMQbL54QFYe_hWpVqdGUvGNoWQkiY7iLkPIUThlduPU")
-            # token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IlVkYXkzIiwiZXhwIjoxNzE1MTEzMzE0fQ.yHiM5qTzhVdRl109D1CKfpEQqZiIrQY13Zd6JPQJ4B4"
-            response.set_cookie('x-access-token',token)
-            return response
-        return make_response("Incorrect password")
-    else:
-        return render_template('login.html')
+    auth=request.form
+    if not auth or not auth["username"] or not auth["password"]:
+        return make_response('Could not verify')
+    user=User.query.filter_by(username=auth['username']).first()
+    if not user:
+        return make_response('No User found')
+    if user.password==auth['password']:
+        # creating 5 min token and setting at cookie
+        exp_time=time.time()+60*5
+        token=jwt.encode({'username':user.username,'exp':exp_time},app.config['SECRET_KEY'],algorithm="HS256")
+        response = make_response("Logged IN")
+        response.set_cookie('x-access-token',token)
+        return response
+    return make_response("Incorrect password")
+
+# CRUD END-POINTS
 
 @app.route('/create_entry',methods=['POST'])
 @token_required
@@ -160,11 +148,6 @@ def delete(id):
         return jsonify(id,"deleted")
     except:
         return jsonify("Invalid id")
-
-@app.route('/home')
-@token_required
-def home():
-    return 'ALL good'
 
 
 if __name__=="__main__":
