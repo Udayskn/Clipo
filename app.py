@@ -168,9 +168,9 @@ def delete(id):
     try:
         db.session.delete(entry)
         db.session.commit()
-        return jsonify(id,"deleted")
+        return jsonify(id,"deleted"),200
     except:
-        return jsonify("Invalid id")
+        return jsonify("Invalid id"),404
 
 
 if __name__=="__main__":
