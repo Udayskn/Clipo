@@ -1,6 +1,8 @@
 # makesure the following libraries are installed in your environment
 from flask import Flask,jsonify,make_response,request,redirect,url_for,render_template
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.exc import IntegrityError
+
 import jwt
 from datetime import datetime
 import time
@@ -20,13 +22,15 @@ def token_required(f):
             token=request.cookies.get('x-access-token')
         if not token:
             # no login data available
-            return jsonify({'message': 'Token is missing'})
+            return jsonify({'message': 'Token is missing'}),401
         try:    
             data=jwt.decode(token,app.config['SECRET_KEY'], algorithms=['HS256'])   
             expiration_time = datetime.fromtimestamp(data['exp'])
-        except:
-            # login data expired (5 min)
-            return jsonify({'message': 'Invalid token'})
+        except jwt.ExpiredSignatureError:
+            return jsonify({'error': 'Token has expired'}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Invalid token'}), 401
+
         return f(*args,**kwargs)
     return decorated
 
@@ -50,34 +54,42 @@ def create_table():
     db.create_all()
 
 #creating user
-@app.route('/create',methods=['POST'])
+@app.route('/create_user',methods=['POST'])
 def create_user():
-    data=request.form
+    data = request.form
     try:
-        new_user=User(username=data['username'],password=data['password'])
+        if 'username' not in data or 'password' not in data:
+            raise ValueError('username and password are required')
+
+        new_user = User(username=data['username'], password=data['password'])
         db.session.add(new_user)
         db.session.commit()
-        return redirect('/login')
-    except:
-        return jsonify('username_taken')
-@app.route('/login',methods=['POST'])
+        return make_response("user_created"),200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Username already taken'}), 400
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': 'An unexpected error occurred'}), 500
 
 #login and setting token
+@app.route('/login',methods=['POST'])
 def login():
     auth=request.form
     if not auth or not auth["username"] or not auth["password"]:
-        return make_response('Could not verify')
+        return make_response('Could not verify',400)
     user=User.query.filter_by(username=auth['username']).first()
     if not user:
-        return make_response('No User found')
+        return make_response('No User found',404)
     if user.password==auth['password']:
         # creating 5 min token and setting at cookie
-        exp_time=time.time()+60*5
+        exp_time=time.time()+60*30
         token=jwt.encode({'username':user.username,'exp':exp_time},app.config['SECRET_KEY'],algorithm="HS256")
         response = make_response("Logged IN")
         response.set_cookie('x-access-token',token)
         return response
-    return make_response("Incorrect password")
+    return make_response("Incorrect password",401)
 
 # CRUD END-POINTS
 
@@ -90,15 +102,17 @@ def create_entry():
         new_entry.title = Entry['title']
         new_entry.description = Entry['description']
         new_entry.status = Entry['status']  # Assuming the form includes a field named 'status'
+        if new_entry.status not in ['active', 'archived']:
+            return jsonify({'error': 'Invalid status value'}), 400  # Correct status code
         db.session.add(new_entry)
         db.session.commit()
         return jsonify("New Entry Created")
     except KeyError as e:
         # Handle the case where a required form field is missing
-        return jsonify(f"Missing form field: {e}")
+        return jsonify(f"Missing form field: {e}"),400
     except Exception as e:
         # Handle other exceptions (e.g., database errors)
-        return jsonify(f"Error creating new entry: {e}")
+        return jsonify(f"Error creating new entry: {e}"),500
 
 @app.route('/', methods=['GET'])
 def retrieve():
@@ -120,28 +134,37 @@ def retrieve():
     # Return the list of dictionaries as JSON
     return jsonify(entries_list)
 
-@app.route('/update_entry/<int:id>',methods=['POST'])
+@app.route('/update_entry/<int:id>', methods=['PUT'])
 @token_required
-def update(id):
-    Entry = request.form
-    update_entry = List.query.filter_by(id=id).first()
+def update_entry(id):
+    entry_data = request.form
+    entry = List.query.get(id)
+    if not entry:
+        return jsonify({'error': 'Entry not found'}), 404
     try:
-        update_entry.title = Entry['title']
-        update_entry.description = Entry['description']
-        update_entry.status = Entry['status']  # Assuming the form includes a field named 'status'
+        
+
+        # Update entry fields if provided in the form data
+        if 'title' in entry_data:
+            entry.title = entry_data['title']
+        if 'description' in entry_data:
+            entry.description = entry_data['description']
+        if 'status' in entry_data:
+            if entry_data['status'] not in ['active', 'archived']:
+                return jsonify({'error': 'Invalid status value'}), 400  # Correct status code
+            entry.status = entry_data['status']
         db.session.commit()
-        return jsonify("Entry Updated")
-    except KeyError as e:
-        # Handle the case where a required form field is missing
-        return jsonify(f"Missing form field: {e}")
+        return jsonify({'message': 'Entry updated successfully'})
     except Exception as e:
-        # Handle other exceptions (e.g., database errors)
-        return jsonify(f"Error creating new entry: {e}")
+        return jsonify({'error': 'An unexpected error occurred'}), 500
 
 @app.route('/delete_entry/<int:id>',methods=['DELETE'])
 @token_required
 def delete(id):
     entry=List.query.filter_by(id=id).first()
+    if not entry:
+        return jsonify({'error': 'Entry not found'}), 404
+
     try:
         db.session.delete(entry)
         db.session.commit()
